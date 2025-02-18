@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -32,6 +33,13 @@ public unsafe class Renderer
     private Fence[]? _inFlightFences;
     private int _currentFrame = 0;
     public List<Scene> ActiveScenes = new();
+
+    //Create a GPU buffer for storing per object constants like their model matrix. Gets uploaded once per scene instead of updating push constants 1000s of times
+    //25000 is a reasonable cap with tons of headroom. mp_crescent is a large map and only has 4814. With the current size of PerObjectConstants it only takes up 1.4MB.
+    //Note that this number is equivalent to the number of RenderObjectBase instances. Since some types like RenderChunk can have many separate pieces with their own constants.
+    public const int MaxObjectsPerScene = 25000;
+    private VkBuffer[] _perObjectConstantsGPUBuffer; 
+    private ObjectConstantsWriter _objectConstantsWriter = new(MaxObjectsPerScene);
     
     public static readonly Format RenderTextureImageFormat = Format.B8G8R8A8Srgb;
     public static Format DepthTextureFormat { get; private set; }
@@ -42,8 +50,12 @@ public unsafe class Renderer
         DepthTextureFormat = FindDepthFormat();
         CreateRenderPass();
         CreateUniformBuffers();
-        MaterialHelper.Init(Context, _renderPass, _perFrameUniformBuffers!);
+        CreatePerObjectConstantBuffers();
+        MaterialHelper.Init(Context, _renderPass, _perFrameUniformBuffers!, _perObjectConstantsGPUBuffer);
         CreateSyncObjects();
+        
+        //Load 1x1 white texture to use when the maximum number of textures aren't provided to a RenderObject
+        Texture2D.LoadDefaultTextures(Context, Context.CommandPool, Context.GraphicsQueue);
     }
 
     public void Shutdown()
@@ -104,6 +116,13 @@ public unsafe class Renderer
                 buffer.Destroy();
             }
         }
+
+        foreach (VkBuffer buffer in _perObjectConstantsGPUBuffer)
+        {
+            buffer.Destroy();
+        }
+        
+        Texture2D.DefaultTexture.Destroy();
 
         Context.Vk.DestroyRenderPass(Context.Device, Context.PrimaryRenderPass, null);
         MaterialHelper.Destroy();
@@ -207,18 +226,42 @@ public unsafe class Renderer
                 MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit);
         }
     }
-
+    
     private void UpdatePerFrameUniformBuffer(Scene scene, uint currentImage)
     {
         PerFrameBuffer perFrame = new()
         {
             View = scene.Camera!.View,
             Projection = scene.Camera!.Projection,
+            CameraPosition = new Vector4(scene.Camera!.Position.X, scene.Camera!.Position.Y, scene.Camera!.Position.Z, 1.0f),
         };
 
         _perFrameUniformBuffers![currentImage].SetData(ref perFrame);
     }
 
+    [MemberNotNull(nameof(_perObjectConstantsGPUBuffer))]
+    private void CreatePerObjectConstantBuffers()
+    {
+        int bufferSize = MaxObjectsPerScene * Unsafe.SizeOf<PerObjectConstants>();
+        _perObjectConstantsGPUBuffer = new VkBuffer[MaxFramesInFlight];
+        for (int i = 0; i < MaxFramesInFlight; i++)
+        {
+            _perObjectConstantsGPUBuffer[i] = new VkBuffer(Context, (ulong)bufferSize, BufferUsageFlags.StorageBufferBit,
+                MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit);
+        }
+    }
+
+    private unsafe void UpdatePerObjectConstantBuffers(uint currentImage)
+    {
+        fixed (PerObjectConstants* bufferPtr = _objectConstantsWriter.Constants)
+        {
+            int size = MaxObjectsPerScene * Unsafe.SizeOf<PerObjectConstants>();
+            Span<byte> data = new((byte*)bufferPtr, size);
+            _perObjectConstantsGPUBuffer![currentImage].SetData(data);
+        }
+    }
+
+    static int _frameCounter = 0;
     private void RecordCommands(Scene scene, uint index)
     {
         CommandBuffer commandBuffer = scene.CommandBuffers![index];
@@ -288,40 +331,43 @@ public unsafe class Renderer
             Context.Vk.CmdBeginRenderPass(commandBuffer, &renderPassInfo, SubpassContents.Inline);
         }
 
-        //Sort render objects by material so each material pipeline is only bound once per frame at most
-        Dictionary<string, List<RenderObject>> renderObjectsByMaterial = new();
-        foreach (RenderObject renderObject in scene.RenderObjects)
-        {
-            if (!renderObjectsByMaterial.ContainsKey(renderObject.Material.Name))
-            {
-                renderObjectsByMaterial.Add(renderObject.Material.Name, new List<RenderObject>());
-            }
+        UpdatePerFrameUniformBuffer(scene, index);
 
-            renderObjectsByMaterial[renderObject.Material.Name].Add(renderObject);
+        _objectConstantsWriter.Reset();
+        
+        List<RenderCommand> commands = new();
+        foreach (RenderObjectBase renderObject in scene.RenderObjects)
+        {
+            renderObject.WriteDrawCommands(commands, scene.Camera!, _objectConstantsWriter);
         }
 
-        UpdatePerFrameUniformBuffer(scene, index);
-        foreach (List<RenderObject> materialGroup in renderObjectsByMaterial.Values)
+        
+        UpdatePerObjectConstantBuffers(index);
+        
+        var commandsByPipeline = commands.GroupBy(command => command.MaterialInstance.Pipeline).ToList();
+        foreach (var pipelineGrouping in commandsByPipeline)
         {
-            if (materialGroup.Count == 0)
-                continue;
-
-            MaterialPipeline pipeline = materialGroup.First().Material.Pipeline;
+            MaterialPipeline pipeline = pipelineGrouping.Key;
             pipeline.Bind(commandBuffer);
-
-            foreach (RenderObject renderObject in materialGroup)
+            
+            var commandsByMesh = pipelineGrouping.ToList().GroupBy(command => command.Mesh).ToList();
+            foreach (var meshGrouping in commandsByMesh)
             {
-                Matrix4x4 translation = Matrix4x4.CreateTranslation(renderObject.Position);
-                Matrix4x4 rotation = renderObject.Orient;
-                Matrix4x4 scale = Matrix4x4.CreateScale(renderObject.Scale);
-                Matrix4x4 model = rotation * translation * scale;
-                PerObjectPushConstants pushConstants = new()
+                Mesh mesh = meshGrouping.Key;
+                mesh.Bind(Context, commandBuffer);
+                
+                var commandsByMaterial = meshGrouping.ToList().GroupBy(command => command.MaterialInstance).ToList();
+                foreach (var materialGrouping in commandsByMaterial)
                 {
-                    Model = model
-                };
-                Context.Vk.CmdPushConstants(commandBuffer, pipeline.Layout, ShaderStageFlags.VertexBit, 0, (uint)Unsafe.SizeOf<PerObjectPushConstants>(), &model);
+                    MaterialInstance material = materialGrouping.Key;
+                    material.Bind(Context, commandBuffer, index);
+                    
+                    foreach (RenderCommand command in materialGrouping)
+                    {
+                        Context.Vk.CmdDrawIndexed(commandBuffer, command.IndexCount, 1, command.StartIndex, 0, command.ObjectIndex);
+                    }
 
-                renderObject.Draw(Context, commandBuffer, index);
+                }
             }
         }
 

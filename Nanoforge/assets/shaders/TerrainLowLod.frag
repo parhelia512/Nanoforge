@@ -1,13 +1,16 @@
-#version 450
+#version 460
 
 layout(binding = 1) uniform sampler2D texSampler;
+layout(binding = 2) uniform sampler2D texSampler2;
+layout(binding = 3) uniform sampler2D texSampler3;
 
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) in vec3 inZonePos;
 
 layout(location = 0) out vec4 outColor;
 
-void main() {
+void main()
+{
     outColor = texture(texSampler, fragTexCoord);
 
     //Get terrain color from _comb texture and adjust it's brightness
@@ -30,7 +33,7 @@ void main() {
     float elevationNormalized = (inZonePos.y + 255.5f) / 511.0f;
     
     //TODO: Add ShadeMode to constants buffer and make it available to fragment shaders
-    int ShadeMode = 0;
+    int ShadeMode = 1;
     if (ShadeMode == 0)
     {
         //Color terrain only by elevation
@@ -41,7 +44,13 @@ void main() {
         //TODO: Uncomment once ambient code is fixed
         //Color terrain with basic lighting
         //outColor =  vec4(ambient + diffuse, 1.0f);
-        outColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        //outColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        
+        vec4 blendValues = texture(texSampler, fragTexCoord);
+        float gamma = 0.2f;
+        vec4 terrainColor = vec4(pow(blendValues.x, 1.0f / gamma), pow(blendValues.y, 1.0f / gamma), pow(blendValues.z, 1.0f / gamma), 1.0f);
+        vec4 lighting = texture(texSampler2, fragTexCoord);
+        outColor = terrainColor * lighting;
     }
     else
     {

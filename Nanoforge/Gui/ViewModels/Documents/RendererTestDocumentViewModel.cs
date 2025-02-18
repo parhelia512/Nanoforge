@@ -24,7 +24,7 @@ using PrimitiveTopology = RFGM.Formats.Meshes.Shared.PrimitiveTopology;
 
 namespace Nanoforge.Gui.ViewModels.Documents;
 
-public partial class RendererTestDocumentViewModel : Document
+public partial class RendererTestDocumentViewModel : NanoforgeDocument
 {
     [ObservableProperty]
     private Scene _scene = new();
@@ -32,13 +32,15 @@ public partial class RendererTestDocumentViewModel : Document
     [ObservableProperty]
     private bool _sceneInitialized = false;
 
-    private RenderObject? _skybox = null;
+    private RenderObjectBase? _skybox = null;
 
     public RendererTestDocumentViewModel()
     {
         TaskDialog dialog = new TaskDialog();
         dialog.ShowDialog(MainWindow.Instance);
         ThreadPool.QueueUserWorkItem(_ => SceneInit(dialog.ViewModel!));
+        InspectorTarget = this;
+        OutlinerTarget = this;
     }
 
     public void SceneInit(TaskDialogViewModel status)
@@ -64,23 +66,23 @@ public partial class RendererTestDocumentViewModel : Document
         string texturePath = "//data/skybox.vpp_pc/rfg_skybox.csmesh_pc.str2_pc/rfg_skybox.cpeg_pc";
         Mesh mesh = LoadRfgStaticMeshFromPackfile(context, "//data/dlcp01_items.vpp_pc/rpg_launcher.str2_pc/rpg.csmesh_pc");
         Texture2D texture = LoadTextureFromPackfile(context, texturePath);
-        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(0.0f, 0.0f, 0.0f), Matrix4x4.Identity, mesh, texture);
+        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(0.0f, 0.0f, 0.0f), Matrix4x4.Identity, mesh, [texture]);
 
         Mesh mesh2 = LoadRfgStaticMeshFromPackfile(context, "//data/items.vpp_pc/multi_object_backpack_thrust.str2_pc/thrust.csmesh_pc");
         Texture2D texture2 = LoadTextureFromPackfile(context, texturePath);
-        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(-2.0f, 0.0f, 0.0f), Matrix4x4.Identity, mesh2, texture2);
+        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(-2.0f, 0.0f, 0.0f), Matrix4x4.Identity, mesh2, [texture2]);
 
         Mesh mesh3 = LoadRfgStaticMeshFromPackfile(context, "//data/items.vpp_pc/EDF_Super_Gauss.str2_pc/super_gauss_rifle.csmesh_pc");
         Texture2D texture3 = LoadTextureFromPackfile(context, texturePath);
-        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(2.0f, 0.0f, -1.0f), Matrix4x4.Identity, mesh3, texture3);
+        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(2.0f, 0.0f, -1.0f), Matrix4x4.Identity, mesh3, [texture3]);
 
         Mesh mesh4 = LoadRfgStaticMeshFromPackfile(context, "//data/items.vpp_pc/missilepod.str2_pc/dlc_rocket_pod.csmesh_pc");
         Texture2D texture4 = LoadTextureFromPackfile(context, texturePath);
-        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(-2.0f, 0.0f, 2.0f), Matrix4x4.Identity, mesh4, texture4);
+        Scene.CreateRenderObject("Pixlit1UvNmap", new Vector3(-2.0f, 0.0f, 2.0f), Matrix4x4.Identity, mesh4, [texture4]);
 
         Mesh mesh5 = LoadRfgStaticMeshFromPackfile(context, "//data/skybox.vpp_pc/rfg_skybox.csmesh_pc.str2_pc/rfg_skybox.csmesh_pc");
         Texture2D texture5 = LoadTextureFromPackfile(context, texturePath);
-        _skybox = Scene.CreateRenderObject("Pixlit1Uv", new Vector3(-2.0f, 0.0f, 2.0f), Matrix4x4.Identity, mesh5, texture5);
+        _skybox = Scene.CreateRenderObject("Pixlit1Uv", new Vector3(-2.0f, 0.0f, 2.0f), Matrix4x4.Identity, mesh5, [texture5]);
         _skybox.Position = Vector3.Zero;
         _skybox.Scale = new Vector3(25000.0f);
 
@@ -104,7 +106,7 @@ public partial class RendererTestDocumentViewModel : Document
     [RelayCommand]
     private void Update(SceneFrameUpdateParams updateParams)
     {
-        foreach (RenderObject renderObject in Scene.RenderObjects)
+        foreach (RenderObjectBase renderObject in Scene.RenderObjects)
         {
             if (renderObject == _skybox)
                 continue;
@@ -113,6 +115,7 @@ public partial class RendererTestDocumentViewModel : Document
             renderObject.Orient = Matrix4x4.CreateRotationY(MathHelpers.ToRadians(angle));
         }
 
+        updateParams.CameraControlsEnabled = Focused;
         Scene.Update(updateParams);
     }
 
@@ -147,7 +150,7 @@ public partial class RendererTestDocumentViewModel : Document
                 throw new Exception(error);
             }
 
-            StaticMesh staticMesh = new();
+            StaticMesh staticMesh = new(cpuFilePath);
             staticMesh.ReadHeader(cpuFile);
             MeshInstanceData meshData = staticMesh.ReadData(gpuFile);
 
@@ -169,7 +172,7 @@ public partial class RendererTestDocumentViewModel : Document
     private Mesh LoadRfgStaticMeshFromPackfile(RenderContext context, string cpuFilePath)
     {
         MeshInstanceData meshData = LoadRfgStaticMesh(cpuFilePath);
-        Mesh mesh = new Mesh(context, meshData.Vertices, meshData.Indices, meshData.Config.NumVertices, meshData.Config.NumIndices, (uint)meshData.Config.IndexSize, context.TransferCommandPool, context.TransferQueue);
+        Mesh mesh = new Mesh(context, meshData, context.TransferCommandPool, context.TransferQueue);
         return mesh;
     }
 
@@ -227,7 +230,7 @@ public partial class RendererTestDocumentViewModel : Document
             ImageTiling.Optimal, ImageUsageFlags.TransferSrcBit | ImageUsageFlags.TransferDstBit | ImageUsageFlags.SampledBit,
             MemoryPropertyFlags.DeviceLocalBit,
             ImageAspectFlags.ColorBit);
-        texture.SetPixels(pixels, context.TransferCommandPool, context.TransferQueue, generateMipMaps: false);
+        texture.SetPixels(pixels, context.TransferCommandPool, context.TransferQueue);
         texture.CreateTextureSampler();
         texture.CreateImageView();
 

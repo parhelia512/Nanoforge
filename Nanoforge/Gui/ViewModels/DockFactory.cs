@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -11,21 +12,42 @@ using Nanoforge.Gui.ViewModels.Docks;
 using Nanoforge.Gui.ViewModels.Documents;
 using Nanoforge.Gui.ViewModels.Pages;
 using Nanoforge.Gui.ViewModels.Tools;
+using Nanoforge.Gui.ViewModels.Tools.FileExplorer;
 
 namespace Nanoforge.Gui.ViewModels;
 
 public class DockFactory : Factory
 {
     private IRootDock? _rootDock;
+    private ProportionalDock? _mainLayout;
     public CustomDocumentDock? DocumentDock;
-
+    public OutlinerViewModel? Outliner;
+    public InspectorViewModel? Inspector;
+    
     public override IDocumentDock CreateDocumentDock() => new CustomDocumentDock();
 
     public override IRootDock CreateLayout()
     {
-        var outliner = new OutlinerViewModel { Id = "Outliner", Title = "Outliner" };
-        var inspector = new InspectorViewModel { Id = "Inspector", Title = "Inspector" };
+        var fileExplorer = new FileExplorerViewModel { Id = "File explorer", Title = "File explorer" };
+        Outliner = new OutlinerViewModel { Id = "Outliner", Title = "Outliner" };
+        Inspector = new InspectorViewModel { Id = "Inspector", Title = "Inspector" };
 
+        var leftDock = new ProportionalDock
+        {
+            Proportion = 0.20,
+            Orientation = Orientation.Vertical,
+            ActiveDockable = null,
+            VisibleDockables = CreateList<IDockable>
+            (
+                new ToolDock
+                {
+                    ActiveDockable = fileExplorer,
+                    VisibleDockables = CreateList<IDockable>(fileExplorer),
+                    Alignment = Alignment.Left
+                }
+            )
+        };
+        
         var rightDock = new ProportionalDock
         {
             Proportion = 0.20,
@@ -35,15 +57,15 @@ public class DockFactory : Factory
             (
                 new ToolDock
                 {
-                    ActiveDockable = outliner,
-                    VisibleDockables = CreateList<IDockable>(outliner),
+                    ActiveDockable = Outliner,
+                    VisibleDockables = CreateList<IDockable>(Outliner),
                     Alignment = Alignment.Right,
                 },
                 new ProportionalDockSplitter(),
                 new ToolDock
                 {
-                    ActiveDockable = inspector,
-                    VisibleDockables = CreateList<IDockable>(inspector),
+                    ActiveDockable = Inspector,
+                    VisibleDockables = CreateList<IDockable>(Inspector),
                     Alignment = Alignment.Right,
                 }
             )
@@ -57,12 +79,12 @@ public class DockFactory : Factory
             CanCreateDocument = false
         };
 
-        var mainLayout = new ProportionalDock
+        _mainLayout = new ProportionalDock
         {
             Orientation = Orientation.Horizontal,
             VisibleDockables = CreateList<IDockable>
             (
-                //leftDock,
+                leftDock,
                 new ProportionalDockSplitter(),
                 documentDock,
                 new ProportionalDockSplitter(),
@@ -76,8 +98,8 @@ public class DockFactory : Factory
         {
             Id = "Editor",
             Title = "Editor",
-            ActiveDockable = mainLayout,
-            VisibleDockables = CreateList<IDockable>(mainLayout)
+            ActiveDockable = _mainLayout,
+            VisibleDockables = CreateList<IDockable>(_mainLayout)
         };
 
         var rootDock = CreateRootDock();
@@ -92,7 +114,7 @@ public class DockFactory : Factory
         
         return rootDock;
     }
-
+    
     public override IDockWindow? CreateWindowFrom(IDockable dockable)
     {
         var window = base.CreateWindowFrom(dockable);
@@ -109,6 +131,7 @@ public class DockFactory : Factory
     {
         ContextLocator = new Dictionary<string, Func<object?>>
         {
+            ["File explorer"] = () => new FileExplorer(),
             ["Outliner"] = () => new Outliner(),
             ["Inspector"] = () => new Inspector(),
             ["Editor"] = () => layout,
@@ -126,5 +149,35 @@ public class DockFactory : Factory
         };
 
         base.InitLayout(layout);
+    }
+
+    public override void OnFocusedDockableChanged(IDockable? focusedDockable)
+    {
+        base.OnFocusedDockableChanged(focusedDockable);
+
+        if (_mainLayout is not { VisibleDockables: not null })
+            return;
+        
+        //Update document focus state
+        var nanoforgeDocuments = _mainLayout.GetChildrenRecursive().OfType<NanoforgeDocument>().ToList();
+        foreach (NanoforgeDocument doc in nanoforgeDocuments)
+        {
+            doc.Focused = doc == focusedDockable;
+        }
+        
+        if (Inspector is null || Outliner is null)
+            return;
+        
+        //Inspector tracks currently selected NF document so it knows what data to bind to its view
+        if (focusedDockable is NanoforgeDocument nfDoc)
+        {
+            Outliner.FocusedDocument = nfDoc;
+            Inspector.FocusedDocument = nfDoc;
+        }
+        else
+        {
+            Outliner.FocusedDocument = null;
+            Inspector.FocusedDocument = null;
+        }
     }
 }

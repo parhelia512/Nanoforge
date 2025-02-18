@@ -26,7 +26,7 @@ public class Camera
     private float _nearPlane;
     private float _farPlane;
 
-    public float Speed = 200.0f;
+    public float Speed = 150.0f;
     public float MovementSmoothing = 0.125f;
     public float LookSensitivity = 0.03f;
     public float LookSmoothing = 0.4f;
@@ -57,33 +57,36 @@ public class Camera
     public void Update(SceneFrameUpdateParams updateParams)
     {
         Position = Vector3.Lerp(Position, TargetPosition, MovementSmoothing);
-        
-        Input input = (MainWindow.Instance as MainWindow)!.Input;
-        if (input.IsKeyDown(Key.W))
-        {
-            TargetPosition += updateParams.DeltaTime * Speed * Forward;
-        }
-        else if (input.IsKeyDown(Key.S))
-        {
-            TargetPosition += updateParams.DeltaTime * Speed * -Forward;
-        }
 
-        if (input.IsKeyDown(Key.A))
+        if (updateParams.CameraControlsEnabled)
         {
-            TargetPosition += updateParams.DeltaTime * Speed * Right;
-        }
-        else if (input.IsKeyDown(Key.D))
-        {
-            TargetPosition += updateParams.DeltaTime * Speed * -Right;
-        }
+            Input input = (MainWindow.Instance as MainWindow)!.Input;
+            if (input.IsKeyDown(Key.W))
+            {
+                TargetPosition += updateParams.DeltaTime * Speed * Forward;
+            }
+            else if (input.IsKeyDown(Key.S))
+            {
+                TargetPosition += updateParams.DeltaTime * Speed * -Forward;
+            }
 
-        if (input.IsKeyDown(Key.Q))
-        {
-            TargetPosition.Y -= updateParams.DeltaTime * Speed;
-        }
-        else if (input.IsKeyDown(Key.E))
-        {
-            TargetPosition.Y += updateParams.DeltaTime * Speed;
+            if (input.IsKeyDown(Key.A))
+            {
+                TargetPosition += updateParams.DeltaTime * Speed * Right;
+            }
+            else if (input.IsKeyDown(Key.D))
+            {
+                TargetPosition += updateParams.DeltaTime * Speed * -Right;
+            }
+
+            if (input.IsKeyDown(Key.Q))
+            {
+                TargetPosition.Y -= updateParams.DeltaTime * Speed;
+            }
+            else if (input.IsKeyDown(Key.E))
+            {
+                TargetPosition.Y += updateParams.DeltaTime * Speed;
+            }
         }
         
         UpdateRotationFromMouse(updateParams);

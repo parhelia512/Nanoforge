@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Nanoforge.Render.Resources;
+using RFGM.Formats.Meshes.Chunks;
 using Serilog;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
@@ -10,7 +11,7 @@ namespace Nanoforge.Render;
 
 public class Scene
 {
-    public List<RenderObject> RenderObjects = new();
+    public List<RenderObjectBase> RenderObjects = new();
     public Camera? Camera;
 
     private RenderContext? _context;
@@ -55,11 +56,19 @@ public class Scene
         InitRenderTextures();
     }
 
-    public RenderObject CreateRenderObject(string materialName, Vector3 position, Matrix4x4 orient, Mesh mesh, Texture2D texture)
+    public SimpleRenderObject CreateRenderObject(string materialName, Vector3 position, Matrix4x4 orient, Mesh mesh, Texture2D[] textures)
     {
-        RenderObject renderObject = new(position, orient, mesh, texture, materialName);
+        SimpleRenderObject renderObject = new(position, orient, mesh, textures, materialName);
         RenderObjects.Add(renderObject);
         return renderObject;
+    }
+    
+    //TODO: Update to take EditorObject version of the ChunkFile/Destroyable
+    public RenderChunk CreateRenderChunk(string materialName, Vector3 position, Matrix4x4 orient, Mesh mesh, List<Texture2D[]> texturesByMaterial, Destroyable destroyable)
+    {
+        RenderChunk chunk = new(position, orient, mesh, texturesByMaterial, materialName, destroyable);
+        RenderObjects.Add(chunk);
+        return chunk;
     }
 
     private void InitRenderTextures()
@@ -217,7 +226,7 @@ public class Scene
             return;
         }
         
-        foreach (RenderObject renderObject in RenderObjects)
+        foreach (RenderObjectBase renderObject in RenderObjects)
         {
             renderObject.Destroy();
         }
@@ -233,11 +242,13 @@ public struct SceneFrameUpdateParams(
     bool rightMouseButtonDown,
     Vector2 mousePosition,
     Vector2 mousePositionDelta,
-    bool mouseOverViewport)
+    bool mouseOverViewport,
+    bool cameraControlsEnabled = true)
 {
     public readonly float DeltaTime = deltaTime;
     public readonly float TotalTime = totalTime;
     public readonly MouseState Mouse = new MouseState(leftMouseButtonDown, rightMouseButtonDown, mousePosition, mousePositionDelta, mouseOverViewport);
+    public bool CameraControlsEnabled = cameraControlsEnabled;
 }
 
 public struct MouseState(bool leftMouseButtonDown, bool rightMouseButtonDown, Vector2 position, Vector2 positionDelta, bool mouseOverViewport)
